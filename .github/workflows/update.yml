@@ -1,0 +1,73 @@
+name: Build PDF.js Chromium
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+
+      - name: Clone pdf.js
+        run: |
+          git clone https://github.com/mozilla/pdf.js.git pdf.js
+
+      - name: Extract stableVersion and checkout
+        working-directory: pdf.js
+        run: |
+          VERSION=$(node -e "
+            const fs = require('fs');
+            const raw = fs.readFileSync('./pdfjs.config', 'utf8');
+            const config = JSON.parse(raw);
+            console.log(config.stableVersion);
+          ")
+      
+          echo "PDFJS_VERSION=$VERSION" >> $GITHUB_ENV
+      
+          git fetch --tags
+          git checkout "v$VERSION"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        working-directory: pdf.js
+        run: npm ci
+
+      - name: Build Chromium target
+        working-directory: pdf.js
+        run: npx gulp chromium
+
+      - name: Copy build output
+        run: |
+          rm -rf extension
+          mkdir -p extension
+          cp -r pdf.js/build/chromium/* extension/
+
+      - name: Commit build artifacts
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+          git add extension
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+
+          git commit -m "Build PDF.js v$PDFJS_VERSION"
+          git push
+
+      - name: Create or update tag (force)
+        run: |
+          git tag -f "v$PDFJS_VERSION"
+          git push origin -f "v$PDFJS_VERSION"
